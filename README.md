@@ -9,6 +9,7 @@ Cascade pull requests to downstream repos for automated dependency management.
   - GITHUB_APP_CLIENT_ID=
   - GITHUB_APP_CLIENT_SECRET=
   - GITHUB_APP_ID=
+  - PORT=(default to 3000 if not set)
 - Add GitHub app private key as `github-app-private-key.pem`
 
 ## Features ideas

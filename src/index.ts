@@ -49,9 +49,11 @@ webhooks.on('pull_request.closed', async ({ id, name, payload }) => {
     await requestConfigFileAndApplyToDb(payload.repository.owner.login, payload.repository.name, installationId)
 })
 
+console.log(`Listening on port ${Number(process.env["PORT"]) || 3000}`)
+
 createServer(
     createNodeMiddleware(webhooks, { path: "/" })
-).listen(3000);
+).listen(Number(process.env["PORT"]) || 3000);
 
 async function authOctokit(installationId: string | number = 'app-scope') {
     let token: any;
