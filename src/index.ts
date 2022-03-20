@@ -35,18 +35,22 @@ const webhooks = new Webhooks({
     secret: process.env['GITHUB_APP_SECRET'] || '',
 });
 
-webhooks.on(['pull_request.opened', 'pull_request.synchronize'], async ({ id, name, payload }) => {
+webhooks.on(['pull_request.opened', 'pull_request.synchronize'], async ({ payload }) => {
     await cascadePR(payload)
 });
 
-webhooks.on('pull_request.closed', async ({ id, name, payload }) => {
+webhooks.on('pull_request.closed', async ({ payload }) => {
     const repoName = payload.repository.name
     console.log(`PR event "${payload.action}" from ${repoName}`)
     if (!payload.installation?.id) {
         throw Error('App misconfigured, installation id not set in webhook payload')
     }
     const installationId = payload.installation?.id
-    await requestConfigFileAndApplyToDb(payload.repository.owner.login, payload.repository.name, installationId)
+    await updateConfig(payload.repository.owner.login, payload.repository.name, installationId)
+})
+
+webhooks.onError((error) => {
+    console.error(error)
 })
 
 console.log(`Listening on port ${Number(process.env["PORT"]) || 3000}`)
@@ -72,16 +76,22 @@ async function authOctokit(installationId: string | number = 'app-scope') {
     return new Octokit(octokitOptions);
 }
 
-async function requestConfigFileAndApplyToDb (owner: string, repo: string, installationId: number) {
+async function updateConfig (owner: string, repo: string, installationId: number) {
     const octokit = await authOctokit(installationId)
-    const response = await octokit.rest.repos.getContent({
-        owner,
-        repo,
-        path: 'cascade.yml'
-    });
-    // @ts-ignore
-    const config = yaml.load(Buffer.from(response.data.content, 'base64')) as Config
-    applyConfig(config, owner, repo)
+    try {
+        const response = await octokit.rest.repos.getContent({
+            owner,
+            repo,
+            path: 'cascade.yml'
+        });
+        // @ts-ignore
+        const config = yaml.load(Buffer.from(response.data.content, 'base64')) as Config
+        applyConfig(config, owner, repo)
+    } catch (e: any) {
+        if (e.status !== 404) {
+            throw e
+        }
+    }
 }
 
 function slugify(name: string): string {
@@ -95,71 +105,73 @@ async function cascadePR (payload: any) {
         throw Error('App misconfigured, installation id not set in webhook payload')
     }
     const octokit = await authOctokit(payload.installation.id)
-    // for all repos that list PR as upstreams
-    const downstreams = db.repos[payload.repository.full_name].downstreams
-    for (const downstream of Object.keys(downstreams)) {
-        try {
-            const {owner, repo} = db.repos[payload.repository.full_name].downstreams[downstream]
-            const repoResponse = await octokit.rest.repos.get({
-                owner,
-                repo
-            })
-            const refResponse = await octokit.rest.git.getRef({
-                owner,
-                repo,
-                ref: `heads/${repoResponse.data.default_branch}`
-            });
-            const commitMessage = `Cascade from ${repoName} PR ${payload.pull_request.id}`
-            const branchName = slugify(commitMessage);
-            const sha = refResponse.data.object.sha
+    // cascade PR on all repos that list PR repo as upstreams
+    if (db.repos[payload.repository.full_name] !== undefined) {
+        const downstreams = db.repos[payload.repository.full_name].downstreams
+        for (const downstream of Object.keys(downstreams)) {
             try {
-                const newBranchRef = await octokit.rest.git.createRef({
+                const {owner, repo} = db.repos[payload.repository.full_name].downstreams[downstream]
+                const repoResponse = await octokit.rest.repos.get({
                     owner,
-                    repo,
-                    ref: `refs/heads/${branchName}`,
-                    sha,
+                    repo
                 })
-                const currentCommit = await octokit.git.getCommit({
+                const refResponse = await octokit.rest.git.getRef({
                     owner,
                     repo,
-                    commit_sha: newBranchRef.data.object.sha,
+                    ref: `heads/${repoResponse.data.default_branch}`
                 });
-                const newCommit = await octokit.git.createCommit({
-                    owner,
-                    repo,
-                    message: commitMessage,
-                    tree: currentCommit.data.tree.sha,
-                    parents: [currentCommit.data.sha],
-                });
-                await octokit.git.updateRef({
-                    owner,
-                    repo,
-                    ref: `heads/${branchName}`,
-                    sha: newCommit.data.sha,
-                });
-            } catch (e: any) {
-                if (e.status !== 422) {
-                    throw e
+                const commitMessage = `Cascade from ${repoName} PR ${payload.pull_request.id}`
+                const branchName = slugify(commitMessage);
+                const sha = refResponse.data.object.sha
+                try {
+                    const newBranchRef = await octokit.rest.git.createRef({
+                        owner,
+                        repo,
+                        ref: `refs/heads/${branchName}`,
+                        sha,
+                    })
+                    const currentCommit = await octokit.git.getCommit({
+                        owner,
+                        repo,
+                        commit_sha: newBranchRef.data.object.sha,
+                    });
+                    const newCommit = await octokit.git.createCommit({
+                        owner,
+                        repo,
+                        message: commitMessage,
+                        tree: currentCommit.data.tree.sha,
+                        parents: [currentCommit.data.sha],
+                    });
+                    await octokit.git.updateRef({
+                        owner,
+                        repo,
+                        ref: `heads/${branchName}`,
+                        sha: newCommit.data.sha,
+                    });
+                } catch (e: any) {
+                    if (e.status !== 422) {
+                        throw e
+                    }
                 }
+                const title = `Cascade ${repoName} #${payload.pull_request.number}: ${payload.pull_request.title}`
+                const body = yaml.dump({
+                    upstream: {
+                        repo: repoName,
+                        branch: payload.pull_request.head.ref,
+                        pull_request_id: payload.pull_request.id
+                    }
+                }) + "\n---"
+                await octokit.rest.pulls.create({
+                    title,
+                    body,
+                    owner,
+                    repo,
+                    head: branchName,
+                    base: repoResponse.data.default_branch,
+                })
+            } catch (e) {
+                console.error(e)
             }
-            const title = `Upstream update ${repoName} for PR ${payload.pull_request.number}`
-            const body = yaml.dump({
-                upstream: {
-                    repo: repoName,
-                    branch: payload.pull_request.head.ref,
-                    pull_request_id: payload.pull_request.id
-                }
-            }) + "\n---"
-            await octokit.rest.pulls.create({
-                title,
-                body,
-                owner,
-                repo,
-                head: branchName,
-                base: repoResponse.data.default_branch,
-            })
-        } catch (e) {
-            console.error(e)
         }
     }
 }

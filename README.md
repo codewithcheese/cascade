@@ -12,6 +12,10 @@ Cascade pull requests to downstream repos for automated dependency management.
   - PORT=(default to 3000 if not set)
 - Add GitHub app private key as `github-app-private-key.pem`
 
+## Remote debugger
+
+`balena tunnel aa737a5 -p 22222 & sleep 10 && ssh -v -p 22222 -L 9229:127.0.0.1:9229 -N root@127.0.0.1`
+
 ## Features ideas
 
 - config can define which data from upstream should be copied
@@ -25,3 +29,4 @@ Cascade pull requests to downstream repos for automated dependency management.
 
 - add upstream merged value
 - add lint-ing
+- add multi-installation support to db and usage

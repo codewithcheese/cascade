@@ -1,4 +1,4 @@
-FROM balenalib/amd64-alpine-node:16
+FROM balenalib/%%BALENA_MACHINE_NAME%%-alpine-node:16
 
 WORKDIR /usr/src/app
 

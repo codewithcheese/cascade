@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc --build",
     "serve": "ts-node ./src",
-    "start": "node ./dist"
+    "start": "node ./dist",
+    "debug": "node --inspect=0.0.0.0:9229 ./dist"
   },
   "author": "",
   "license": "ISC",
