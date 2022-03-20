@@ -84,3 +84,4 @@ dist/
 tmp/
 
 db.json
+github-app-private-key.pem

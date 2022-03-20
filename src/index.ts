@@ -1,21 +1,23 @@
+import fs from 'fs'
+import path from 'path'
 import { createServer } from 'http'
 
 import 'dotenv/config'
 import yaml from 'js-yaml';
-
 import { Webhooks, createNodeMiddleware } from '@octokit/webhooks'
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
 
 import {Config} from "./config";
 import {db, applyConfig} from "./db";
+import * as process from "process";
 
 const octokitOptions = {
     authStrategy: createAppAuth,
     auth: {
         type: 'app',
         appId: process.env['GITHUB_APP_ID'],
-        privateKey: process.env['GITHUB_APP_PRIVATE_KEY'],
+        privateKey: fs.readFileSync(path.join(process.cwd(), 'github-app-private-key.pem')),
         clientId: process.env['GITHUB_APP_CLIENT_ID'],
         clientSecret: process.env['GITHUB_APP_CLIENT_SECRET'],
     }
@@ -24,19 +26,9 @@ const octokitOptions = {
 const github = new Octokit(octokitOptions);
 
 (async () => {
-    const octokit = await authOctokit(Number(process.env['GITHUB_TEST_INSTALLATION_ID']))
-    const owner = 'codewithcheese'
-    const repo = 'product-c'
-    const repoResponse = await octokit.request('GET /repos/{owner}/{repo}', {
-        owner,
-        repo
-    })
-    const response = await octokit.rest.git.getRef({
-        owner,
-        repo,
-        ref: `heads/${repoResponse.data.default_branch}`
-    });
-    console.log(response)
+    const octokit = await authOctokit()
+    const userResponse = await octokit.rest.apps.getAuthenticated()
+    console.log(`Authenticated as ${userResponse.data.name}`)
 })()
 
 const webhooks = new Webhooks({
@@ -61,11 +53,18 @@ createServer(
     createNodeMiddleware(webhooks, { path: "/" })
 ).listen(3000);
 
-async function authOctokit(installationId: number) {
-    const { token } = (await github.auth({
-        type: 'installation',
-        installationId,
-    })) as any;
+async function authOctokit(installationId: string | number = 'app-scope') {
+    let token: any;
+    if (installationId === 'app-scope') {
+        ({ token } = (await github.auth({
+            type: 'app',
+        })) as any);
+    } else {
+        ({ token } = (await github.auth({
+            type: 'installation',
+            installationId,
+        })) as any);
+    }
     Reflect.deleteProperty(octokitOptions, 'authStrategy');
     octokitOptions.auth = token;
     return new Octokit(octokitOptions);
